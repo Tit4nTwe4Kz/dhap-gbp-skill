@@ -52,6 +52,7 @@ STATES = dict(AL="Alabama", AK="Alaska", AZ="Arizona", AR="Arkansas", CA="Califo
               VT="Vermont", VA="Virginia", WA="Washington", WV="West Virginia", WI="Wisconsin", WY="Wyoming")
 
 
+RAW_DIR = None   # set by main(): <out>/raw_google_ai
 _u = threading.local()   # usage of the ask running on this thread: tokens, searches, calls (for the cost report)
 def use(**n):
     d = getattr(_u, "d", None)
@@ -144,9 +145,11 @@ def _blocks_text(blocks, depth=0):
     """SerpApi text_blocks (paragraph / heading / list / table ...) -> plain text, keeping list nesting."""
     out = []
     for b in blocks or []:
-        lr = b.get("local_result") or {}   # a place card: the business name is only here
-        line = " ".join(str(x) for x in (lr.get("title"), f"({lr['type']})" if lr.get("type") else None,
-                                          b.get("title"), b.get("snippet")) if x)
+        lr = b.get("local_result") or {}   # a place card: the business name may be only here
+        name, card = b.get("title") or lr.get("title"), lr.get("title")
+        if name and card and card != name and card.casefold() not in name.casefold():
+            name = f"{name} [place card: {card}]"
+        line = " ".join(str(x) for x in (name, f"({lr['type']})" if lr.get("type") else None, b.get("snippet")) if x)
         if line:
             out.append(("  " * depth + "- " if depth else "") + line)
         for k in ("list", "text_blocks"):
@@ -159,7 +162,12 @@ def _blocks_text(blocks, depth=0):
 
 def ask_google_ai(q, p, cap=None):   # SerpApi returns what Google showed; nothing to cap
     key = os.environ["SERPAPI_API_KEY"]
-    serp = lambda **kw: (use(calls=1, searches=1), with_retries(lambda: http("GET", "https://serpapi.com/search.json?" + urllib.parse.urlencode({**kw, "api_key": key, "no_cache": "true"}))))[1]
+    def keep(r, kw):   # the raw response, kept as proof next to the answers
+        if RAW_DIR:
+            RAW_DIR.mkdir(parents=True, exist_ok=True)
+            (RAW_DIR / f"{kw.get('engine')}_{fold(q).replace(' ', '-')[:60]}_{time.time_ns()}.json").write_text(json.dumps(r, ensure_ascii=False))
+        return r
+    serp = lambda **kw: (use(calls=1, searches=1), keep(with_retries(lambda: http("GET", "https://serpapi.com/search.json?" + urllib.parse.urlencode({**kw, "api_key": key, "no_cache": "true"}))), kw))[1]
     loc = f"{p['city']}, {p['state_name']}, United States"
     r = serp(engine="google", q=q, location=loc, gl="us", hl="en")
     ov = r.get("ai_overview") or {}
@@ -282,6 +290,10 @@ def candidates(answer, scan=True):
     low, seen, out = answer.casefold(), set(), []
     for n in found:
         n = n.strip(" *#.:-–—\t")
+        w = n.split()
+        for k in range(len(w) // 2, 0, -1):   # 'James Mitsubishi Greece James Mitsubishi Greece' -> once
+            if w[-k:] == w[:k]:
+                n = " ".join(w[:-k]).rstrip(" /&,-"); break
         k = fold(n)
         if not k or k in seen or len(n) > 80 or ADDRESS.search(n):
             continue
@@ -389,8 +401,8 @@ def top2(answer, dealer=None, scan=True):
             typ = ch["choice"] if ch.get("choice") in TYPES and float(ch.get("confidence") or 0) >= D.YES else \
                 next((k for k, rx in TYPE_RULE if re.search(rx, c["name"], re.I)), "other")
             row = {"name": c["name"], "pos": c["pos"], "p": p, "rule": rule, "is_business": is_biz, "by": by, "type": typ}
-            dup = is_biz and any(base(c["name"]) == base(x["name"]) or base(c["name"]).startswith(base(x["name"]) + " ")
-                                 or base(x["name"]).startswith(base(c["name"]) + " ") for x in top)
+            dup = is_biz and any(f" {base(c['name'])} " in f" {base(x['name'])} " or f" {base(x['name'])} " in f" {base(c['name'])} "
+                                 for x in top)   # the same business named again, alone or inside a combined name
             row["counted"] = bool(is_biz and not dup)
             if row["counted"]:
                 top.append({"name": c["name"], "type": typ})
@@ -479,6 +491,8 @@ def main():
         print(f"SKIPPED {t}: {KEY[t]} is not set (keys.env)")
     tools = [t for t in tools if t not in missing]
     out = pathlib.Path(a.out); out.mkdir(parents=True, exist_ok=True)
+    global RAW_DIR
+    RAW_DIR = out / "raw_google_ai"
 
     recs, done, lock = {}, set(), threading.Lock()
     for t in tools:

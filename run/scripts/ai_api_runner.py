@@ -144,7 +144,9 @@ def _blocks_text(blocks, depth=0):
     """SerpApi text_blocks (paragraph / heading / list / table ...) -> plain text, keeping list nesting."""
     out = []
     for b in blocks or []:
-        line = " ".join(str(b.get(k)) for k in ("title", "snippet") if b.get(k))
+        lr = b.get("local_result") or {}   # a place card: the business name is only here
+        line = " ".join(str(x) for x in (lr.get("title"), f"({lr['type']})" if lr.get("type") else None,
+                                          b.get("title"), b.get("snippet")) if x)
         if line:
             out.append(("  " * depth + "- " if depth else "") + line)
         for k in ("list", "text_blocks"):
@@ -167,7 +169,7 @@ def ask_google_ai(q, p, cap=None):   # SerpApi returns what Google showed; nothi
     if not ov.get("text_blocks"):
         ov = serp(engine="google_ai_mode", q=q, location=loc, gl="us", hl="en")
         via = "Google AI Mode via SerpApi (no AI Overview shown)"
-        if ov.get("reconstructed_markdown"):
+        if ov.get("reconstructed_markdown") and not ov.get("text_blocks"):
             return ov["reconstructed_markdown"], [x.get("link") for x in ov.get("references", [])], f"{via}, location {loc}"
     text = "\n".join(_blocks_text(ov.get("text_blocks")))
     return text, [x.get("link") for x in ov.get("references", [])], f"{via}, location {loc}"
@@ -215,30 +217,229 @@ def ask_brave(q, p, cap=None):
     return text, src, "Brave Search API, AI Grounding"
 
 
-_extractor = None
-def top2(answer):
-    """The first 2 businesses the answer names, in its order, as [{name, type}] (Claude Haiku, structured output)."""
-    global _extractor
+# ---- top 2: code + Haiku find the names, JEV judges them, a fixed rule checks JEV (SKILL.md: JEV decides first) ----
+def _engine():
+    """engine/decide.py from the rules repository (one JEV client, model pinned there)."""
+    import sys
+    for d in (HERE.parents[1] / "engine", pathlib.Path.home() / "dhap-gbp-skill" / "engine"):
+        if (d / "decide.py").exists():
+            sys.path.insert(0, str(d))
+            import decide
+            return decide
+    raise Blocked("engine/decide.py not found (clone Clikdata2/dhap-gbp-skill to ~/dhap-gbp-skill)")
+
+
+def fold(s):
+    return " ".join(re.sub(r"[^a-z0-9&]+", " ", str(s).casefold()).split())
+
+
+BOLD = re.compile(r"\*\*([^*\n]{2,80})\*\*")
+LEAD = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(?:\*\*)?([A-Z0-9][^:\n–—|(*]{1,70}?)\s*(?:\*\*|[:–—|(]|$)", re.M)
+NOT_BUSINESS = re.compile(   # the fixed rule that checks JEV: a car, a website, a place, a heading or advice
+    r"\.(com|net|org|io)\b|\b(cargurus|autotrader|edmunds|kelley blue book|kbb|truecar|yelp|google|facebook|craigslist|"
+    r"repairpal|carfax|cars com|reddit|youtube|consumer reports)\b|"
+    r"^(acura|audi|bmw|buick|cadillac|chevrolet|chevy|chrysler|dodge|ford|gmc|honda|hyundai|infiniti|jeep|kia|lexus|"
+    r"lincoln|mazda|mercedes|mitsubishi|nissan|ram|subaru|tesla|toyota|volkswagen|vw|volvo)( [a-z0-9-]+){0,3}$|"
+    r"^(address|phone|hours|rating|price|details|why go|tip|tips|note|summary|bottom line|cost|estimate|average)\b|"
+    r"\b(near|in) (you|your area)\b|\b(on or near|options|shops|dealerships|dealers|stores|locations)$|"
+    r"^(choosing|fastest|cheapest|best|budget|convenience|convenient|quick|overall|pricing|prices|coupons|deals|"
+    r"specials|recommendations|independent|dealer|dealership|chains?|national chains?|local shops?|other|more)$", re.I)
+ADDRESS = re.compile(r"\(?\d{3}\)?[ .-]?\d{3}[ .-]\d{4}|^\d+\s+\S+|^(located at|location\b|address\b)|\blocation( \d+)?$|\b(ny|n\.y\.) \d{5}$", re.I)
+CHUNK = 20   # candidates per JEV request, in reading order; stop once the top 2 are found
+
+
+def looks_like_business(name):
+    """The fixed rule that checks JEV: a proper name (capitalized words, no prices or counts) that is not a car, a
+    website, a place, a heading or advice."""
+    words = re.findall(r"[A-Za-z][\w'’&-]*", name)
+    caps = sum(w[0].isupper() for w in words)
+    if not words or not name[0].isupper() or re.search(r"[$%]|\d{2,}", name) or caps < max(1, len(words) // 2):
+        return False
+    return not NOT_BUSINESS.search(fold(name) if "." not in name else name)
+
+
+def base(name):
+    """A chain's name without the branch: 'Valvoline Instant Oil Change (Latta Rd)', 'Jiffy Lube — Henrietta' and
+    'Advance Auto Parts #3555' each count once."""
+    return fold(re.sub(r"\s*[(\[].*$|\s+[—–-]\s+.*$|\s*#\s*\d+.*$", "", name))
+
+
+TYPE_RULE = [("oil_change", r"valvoline|jiffy|take 5|lube|oil change|quick lane|delta sonic"),
+             ("parts_store", r"autozone|advance auto|o.?reilly|napa|carquest|pep boys|parts"),
+             ("tire_shop", r"tire|discount tire|mavis|firestone|goodyear|dunn"),
+             ("retailer", r"walmart|costco|target|sam.?s club|bj.?s|canadian tire|meijer"),
+             ("dealership", r"auto group|motors|automotive group|dealership|carmax|carvana|chevrolet|toyota|honda|hyundai|"
+                            r"kia|nissan|subaru|ford|mitsubishi|jeep|chrysler|dodge|buick|gmc|mazda|volkswagen|lexus|acura|used"),
+             ("repair_shop", r"auto care|repair|automotive|muffler|brake|midas|monro|service center|garage|mechanic")]
+
+
+def candidates(answer, scan=True):
+    """Every name that might be a business, in the order it first appears in the answer (code over-finds; Haiku adds
+    names the patterns miss). Each candidate is copied from the answer, so nothing can be made up."""
+    found = [m.group(1) for m in BOLD.finditer(answer)] + [m.group(1) for m in LEAD.finditer(answer)]
+    if scan:
+        found += haiku_names(answer)
+    low, seen, out = answer.casefold(), set(), []
+    for n in found:
+        n = n.strip(" *#.:-–—\t")
+        k = fold(n)
+        if not k or k in seen or len(n) > 80 or ADDRESS.search(n):
+            continue
+        pos = low.find(n.casefold())
+        if pos < 0:
+            continue                      # not in the answer word for word: never used
+        seen.add(k); out.append({"name": n, "pos": pos})
+    return sorted(out, key=lambda c: c["pos"])
+
+
+_haiku = None
+def haiku_names(answer):
+    """Claude Haiku lists names only (no judging, no order): JEV and the rule decide what counts."""
+    global _haiku
     import anthropic
-    _extractor = _extractor or anthropic.Anthropic(max_retries=4)
-    schema = {"type": "object", "additionalProperties": False, "required": ["businesses"], "properties": {
-        "businesses": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["name", "type"],
-                       "properties": {"name": {"type": "string"}, "type": {"type": "string", "enum": TYPES}}}}}}
-    r = _extractor.messages.create(
-        model=EXTRACT_MODEL, max_tokens=1024,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
-        messages=[{"role": "user", "content":
-            "Below is an AI assistant's answer to a local shopper. List the first two businesses it names, in the order "
-            "it names them, with each name written exactly as in the answer. Count only specific businesses or stores "
-            "(not websites like Yelp or Google, and not generic advice). type: dealership, oil_change (quick lube), "
-            "tire_shop, parts_store, repair_shop, retailer (big-box or general store), or other. Return fewer if it "
-            "names fewer.\n\n<answer>\n" + answer[:12000] + "\n</answer>"}])
+    _haiku = _haiku or anthropic.Anthropic(max_retries=4)
+    schema = {"type": "object", "additionalProperties": False, "required": ["names"],
+              "properties": {"names": {"type": "array", "items": {"type": "string"}}}}
+    r = _haiku.messages.create(
+        model=EXTRACT_MODEL, max_tokens=1024, output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        messages=[{"role": "user", "content": "Copy, word for word, every name in this text that could be a business "
+                   "(dealerships, shops, stores, service centers, chains). Include doubtful ones. Names only.\n\n<text>\n"
+                   + answer[:12000] + "\n</text>"}])
     use(extract_input_tokens=r.usage.input_tokens, extract_output_tokens=r.usage.output_tokens)
-    text = next(b.text for b in r.content if b.type == "text")
-    return json.loads(text)["businesses"][:TOP]
+    return json.loads(next(b.text for b in r.content if b.type == "text"))["names"]
+
+
+IS_BUSINESS = ("In this answer an AI assistant gave a local car shopper, is {cand} a specific business the answer "
+               "suggests the shopper go to or call?",
+               "It is a dealership, dealer group, repair or tire shop, quick-lube, parts store, retailer or service center "
+               "that the answer lists, recommends or suggests as a place to go.",
+               "It is a car make or model, a website, app, marketplace or review site (Cars.com, CarGurus, Yelp), a town, "
+               "road, street address or area, a landmark mentioned only to give directions, a heading or category (for example "
+               "'Quick-Service Oil Change Centers'), or general advice.")
+TYPE_Q = ("What kind of business is {cand}, going by this answer?",
+          {"dealership": "Sells cars (new or used), including dealer groups and used-car lots",
+           "oil_change": "Quick-lube or oil-change shop", "tire_shop": "Tire shop or tire and service chain",
+           "parts_store": "Auto parts store", "repair_shop": "Independent repair or service shop",
+           "retailer": "Big-box or general store", "other": "Anything else"})
+IS_DEALER = ("Is {cand} the dealership {dealer}, or one of its departments?",
+             "The names differ only by spelling, punctuation, abbreviations, the town, the brand order, or words like Inc, "
+             "LLC, Sales, Service or Parts, so a shopper would read them as the same dealership.",
+             "It is a different dealership, dealer group, brand or business.")
+
+
+def _jev(D, url, key, answer, C, dealer):
+    """One JEV request for a batch of candidates: is it a business (noul), what kind (choice), is it the dealer (noul)."""
+    state = {"answer": answer[:20000], **{f"cand_{i}": c["name"] for i, c in enumerate(C)}}
+    qs = {}
+    for i in range(len(C)):
+        ins, yes, no = IS_BUSINESS
+        qs[f"biz_{i}"] = {"type": "noul", "instructions": ins.format(cand=f"cand_{i}"), "criteria": {"true": yes, "false": no}}
+        qs[f"type_{i}"] = {"type": "choice", "instructions": TYPE_Q[0].format(cand=f"cand_{i}"), "criteria": TYPE_Q[1]}
+        if dealer:
+            ins, yes, no = IS_DEALER
+            qs[f"dealer_{i}"] = {"type": "noul", "instructions": ins.format(cand=f"cand_{i}", dealer=dealer),
+                                 "criteria": {"true": yes, "false": no}}
+    auth = {"X-DHAP-Code": key[5:]} if key.startswith("team:") else {"Authorization": f"Bearer {key}"}
+    r = with_retries(lambda: http("POST", url, auth, {"model": D.MODEL, "state": state, "questions": qs}, timeout=60), tries=3)
+    return r.get("answers") or {}, float((r.get("usage") or {}).get("input_tokens") or 0), r.get("model")
+
+
+def top2(answer, dealer=None, scan=True):
+    """The first 2 businesses the answer names, in its order -> ([{name, type}], JEV ledger).
+    JEV sure (yes >= 0.7, no <= 0.3) decides; JEV unsure or unavailable -> the rule decides. A disagreement on a name
+    that could put a wrong name in the top 2 (JEV yes / rule no, or JEV unsure) is listed for a person
+    (ledger["review"]); JEV turning down what the rule let through is counted in ledger["overruled"]."""
+    D = _engine()
+    C = candidates(answer, scan)
+    led = {"model": D.MODEL, "status": "skipped" if C else "ok", "candidates": [], "review": [], "cost_usd": 0.0}
+    url, key = D._service()
+    if C and not key:
+        led["reason"] = "no JEV key (DHAP_SERVICE_URL + DHAP_TEAM_CODE, or TYPESAFE_API_KEY)"
+    dkey = fold(re.sub(r"\b(of|the|inc|llc)\b", " ", dealer or "", flags=re.I)).split()
+    top, dealer_hit, tok = [], False, 0.0
+
+    def decide(a, qid, rule, what, name, notes):
+        try:
+            p = float((a.get(qid) or {})["noul"])
+        except (KeyError, TypeError, ValueError):
+            return rule, "rule (JEV unavailable)", None
+        says = "yes" if p >= D.YES else "no" if p <= D.NO else "unsure"
+        if says == "unsure":
+            notes.append(f"{name!r} {what}: JEV unsure (p={p:.2f}); the rule's {'yes' if rule else 'no'} is used")
+            return rule, "rule (JEV unsure)", p
+        if says == "yes" and not rule:      # could put a wrong name in the top 2: a person checks it
+            notes.append(f"{name!r} {what}: JEV says yes, the rule says no; JEV's answer is used")
+        elif says == "no" and rule:         # JEV turned down what the rule let through: kept in the record, not listed
+            led["overruled"] = led.get("overruled", 0) + 1
+        return says == "yes", "jev", p
+
+    for s in range(0, len(C), CHUNK):
+        batch, a = C[s:s + CHUNK], {}
+        if key:
+            try:
+                a, n, served = _jev(D, url, key, answer, batch, dealer)
+                tok += n; led.update(status="ok", model_served=served)
+            except Blocked as e:
+                led["status"], led["reason"] = "skipped", str(e)[:200]
+        for i, c in enumerate(batch):
+            notes = []
+            rule = looks_like_business(c["name"])
+            is_biz, by, p = decide(a, f"biz_{i}", rule, "is a business", c["name"], notes)
+            ch = a.get(f"type_{i}") or {}
+            typ = ch["choice"] if ch.get("choice") in TYPES and float(ch.get("confidence") or 0) >= D.YES else \
+                next((k for k, rx in TYPE_RULE if re.search(rx, c["name"], re.I)), "other")
+            row = {"name": c["name"], "pos": c["pos"], "p": p, "rule": rule, "is_business": is_biz, "by": by, "type": typ}
+            dup = is_biz and any(base(c["name"]) == base(x["name"]) or base(c["name"]).startswith(base(x["name"]) + " ")
+                                 or base(x["name"]).startswith(base(c["name"]) + " ") for x in top)
+            row["counted"] = bool(is_biz and not dup)
+            if row["counted"]:
+                top.append({"name": c["name"], "type": typ})
+                if dealer:
+                    drule = bool(dkey) and all(w in fold(c["name"]).split() for w in dkey[:2])
+                    row["dealer"], row["dealer_by"], row["dealer_p"] = decide(a, f"dealer_{i}", drule, f"is {dealer}", c["name"], notes)
+                    dealer_hit |= row["dealer"]
+            led["review"] += notes          # only names read up to the 2nd business: these decide the top 2
+            led["candidates"].append(row)
+            if len(top) == TOP:
+                break
+        if len(top) == TOP:
+            break
+    use(jev_input_tokens=tok)
+    led["cost_usd"] = round(tok * D.PRICE_PER_M_INPUT / 1e6, 8)
+    if led["status"] != "ok":
+        led["review"].append(f"JEV did not run ({led.get('reason')}); every answer came from the rule")
+    if dealer:
+        led["dealer"], led["dealer_in_top2"] = dealer, dealer_hit
+    return top, led
 
 
 ASK = {"chatgpt": ask_chatgpt, "gemini": ask_gemini, "google_ai": ask_google_ai, "claude": ask_claude, "brave": ask_brave}
+
+
+def reextract(out, tools, dealer=None):
+    """Pull the top 2 again from saved answers (after an extraction fix). Re-asks nothing; only Claude Haiku is called."""
+    t0, lock = time.time(), threading.Lock()
+    for t in tools:
+        f = out / f"dhap_ai_{t}.json"
+        if not f.exists():
+            continue
+        recs = json.loads(f.read_text())
+        def one(rec):
+            _u.d = {}
+            try:
+                rec["top2"], rec["jev"] = top2(rec["answer"], dealer); rec.pop("top2_error", None)
+            except Exception as e:
+                rec.pop("top2", None); rec["top2_error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            with lock:
+                u = rec.setdefault("usage", {})
+                u["reextract_input_tokens"] = u.get("reextract_input_tokens", 0) + _u.d.get("extract_input_tokens", 0)
+                u["reextract_jev_input_tokens"] = u.get("reextract_jev_input_tokens", 0) + _u.d.get("jev_input_tokens", 0)
+                u["reextract_output_tokens"] = u.get("reextract_output_tokens", 0) + _u.d.get("extract_output_tokens", 0)
+        with cf.ThreadPoolExecutor(10) as ex:
+            list(ex.map(one, [r for r in recs if r.get("status") == "answered"]))
+        f.write_text(json.dumps(recs, indent=1, ensure_ascii=False))
+        print(t, sum("top2" in r for r in recs), "re-pulled,", sum("top2_error" in r for r in recs), "errors", flush=True)
+    print(f"re-pulled in {time.time() - t0:.0f}s")
 
 
 def parse_runs(s):
@@ -253,7 +454,9 @@ def main():
     ap.add_argument("--tools", default=",".join(TOOLS))
     ap.add_argument("--questions", default=",".join(QUESTIONS))
     ap.add_argument("--runs", default="1-5")
+    ap.add_argument("--dealer", help='the dealership\'s name, e.g. "James Mitsubishi" (JEV checks whether each top-2 name is this dealer)')
     ap.add_argument("--check-keys", action="store_true")
+    ap.add_argument("--reextract", action="store_true", help="pull the top 2 again from the answers already saved in --out (asks nothing)")
     a = ap.parse_args()
     load_keys()
     tools = [t for t in a.tools.split(",") if t]
@@ -262,6 +465,10 @@ def main():
         for t in tools:
             print(f"{t:10} {KEY[t]:18} {'set' if t not in missing else 'MISSING'}")
         return
+    if a.reextract:
+        if not a.out:
+            ap.error("--out is required")
+        return reextract(pathlib.Path(a.out), tools, a.dealer)
     if not (a.city and a.out):
         ap.error("--city and --out are required")
     m = re.match(r"^\s*(.+?),\s*([A-Z]{2})\s*$", a.city)
@@ -291,7 +498,7 @@ def main():
                 raise Blocked("empty or near-empty answer")
             rec.update(status="answered", answer=text.strip(), complete=True, via=via, sources=[s for s in src if s][:40])
             try:
-                rec["top2"] = top2(rec["answer"])
+                rec["top2"], rec["jev"] = top2(rec["answer"], a.dealer)
             except Exception as e:   # ai_merge.py falls back to its own name list; the answer is still saved
                 rec["top2_error"] = f"{type(e).__name__}: {str(e)[:200]}"
         except Blocked as e:

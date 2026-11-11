@@ -1,4 +1,4 @@
-# DHAP GBP — v16.8 (public repository edition, Nov 11 2026) — SINGLE SOURCE OF TRUTH
+# DHAP GBP — v16.9 (public repository edition, Nov 11 2026) — SINGLE SOURCE OF TRUTH
 Current builds: **James Mitsubishi Greece DHAP v21 · Digital Health Alert hot sheet v28** (in `reference/`, with RULE K evidence popups) — built from the Oct 20 2026 re-audit under the v13 rubrics and the v14 status rule. `templates/` keeps DHAP v20 / hot sheet v27 as the structural base the builds start from. This body supersedes all earlier notes. If anything elsewhere conflicts with this body, this body wins.
 **Running this skill — nothing to install.** Anyone starts a run by pasting the one-line run prompt from the repository README; Ask AI then reads this file fresh from the repository, so every user is on the same version. This public edition writes the knowledge base id as `{{KB_ID}}` and the sub-account id as `{{LOCATION_ID}}`. **Resolve them at run time:** `{{LOCATION_ID}}` = this sub-account's location id from the session context; `{{KB_ID}}` = the id of the knowledge base named "Mitsubishi CLIKsearch" (description "MiDS program-specific details and pricing") — list the sub-account's knowledge bases and pick it by name; if none or more than one match, STOP and tell the user. Never write real ids into this file or into any page.
 
@@ -8,7 +8,7 @@ Current builds: **James Mitsubishi Greece DHAP v21 · Digital Health Alert hot s
 
 ## 🔒 GOVERNANCE — MANDATORY (no drift between users)
 1. This skill is the only source of truth for DHAP GBP work. Never keep parallel copies; never follow a stale copy.
-2. **At the start of every run state the revision**: "Using DHAP GBP v16.8." (no saved copy of this skill is needed or used inside Ask AI — the run prompt in the repository README points Ask AI at this file)
+2. **At the start of every run state the revision**: "Using DHAP GBP v16.9." (no saved copy of this skill is needed or used inside Ask AI — the run prompt in the repository README points Ask AI at this file)
 3. Edit this skill ONLY when the user explicitly asks ("update the skill", "lock this in") or states a new standing rule. Never edit silently mid-run.
 4. Every edit: bump the version (v13 → v13.1 …), update the header line above, and append an entry to the change log (`CHANGELOG.md` in the repository) (date · version · what changed · who asked). If two people's instructions conflict, stop and ask rather than choose.
 5. Preferences that must apply to everyone live HERE, not in personal memory (memory is per-user and not shared).

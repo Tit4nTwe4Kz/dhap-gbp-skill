@@ -272,7 +272,8 @@ h = h.replace("Averages from active active CLIKsearch", "Averages from active CL
 h = h.replace("James Mitsubishi Greece", DEALER).replace("Greece, NY", "Vacaville, CA")
 _o1 = "MiDS reimbursement can bring net dealer cost to $0. Get optimized and syndicated in 72 hours."
 assert _o1 in h
-h = h.replace(_o1, "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding. Results in 90 days.")
+h = h.replace(_o1, "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding.")   # the template's own "Results in 90 days." follows
+assert h.count("Go-live in 72 hours after onboarding. Results in 90 days.") == 1 and h.count("Results in 90 days.") == 1
 (OUT / "vacaville-mitsubishi_dhap_v20.html").write_text(h, encoding="utf-8")
 
 # =====================================================================

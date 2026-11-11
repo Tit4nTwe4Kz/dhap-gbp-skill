@@ -22,7 +22,7 @@ Every such departure goes in the final message to the user.
 
 ## Template text to correct (do this, and say so)
 - "Averages from active active CLIKsearch…" → single "active" (typo).
-- "MiDS reimbursement can bring net dealer cost to $0" in the Investment banner contradicts "up to 100%, no guarantees" (KB: "up to 100% reimbursement based on available funds"). Replace with "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding. Results in 90 days." The repo assertion needs "Results in 90 days" in the Investment tab.
+- "MiDS reimbursement can bring net dealer cost to $0. Get optimized and syndicated in 72 hours." in the Investment banner contradicts "up to 100%, no guarantees" (KB: "up to 100% reimbursement based on available funds"). Replace those two sentences with "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding." and keep the template's own "Results in 90 days." that follows them, so the banner ends "… Go-live in 72 hours after onboarding. Results in 90 days." with that sentence once, never twice. The repo assertion needs "Results in 90 days" in the Investment tab.
 - The ACT NOW impact cell is "Department Revenue Gains" (title case — the repo assertion uses that exact string).
 
 ## Wording rules to re-check before saving (repo has the full list)

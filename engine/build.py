@@ -368,8 +368,9 @@ def build_dhap(tpl, c, ev, sc):
                  f'    <div class="finding-body">{w["body"]} <em style="color:#6b7280;">(Specific competitor activity in this market not directly audited.)</em></div>\n  </div>\n  ') + h[b:]
     # template text fixes (documented in the run skill): typo, and the KB-aligned reimbursement wording
     h = h.replace("Averages from active active CLIKsearch", "Averages from active CLIKsearch")
+    # the template's own "Results in 90 days." follows the replaced text, so the replacement must not end with it (v16.9)
     h = h.replace("MiDS reimbursement can bring net dealer cost to $0. Get optimized and syndicated in 72 hours.",
-                  "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding. Results in 90 days.")
+                  "Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding.")
     for old, kind in TEMPLATE_DEALER: h = h.replace(old, c["city_st"] if kind else c["dealer"])
     h = rep(h, "</head>", DS.CSS + "</head>", what="DHAP </head>")
     return h

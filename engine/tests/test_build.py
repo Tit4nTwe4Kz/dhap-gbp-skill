@@ -59,6 +59,10 @@ def round_once(n):
         ok(f"{name}: Clarity code (RULE M) once on each page, tagged with the dealer and report type",
            all(p.count("clarity.ms/tag/") == 1 and tag in p and p.index("clarity.ms/tag/") < p.index("</head>") for p in (D, H))
            and 'clarity("set","report_type","DHAP")' in D and 'clarity("set","report_type","ALERT")' in H)
+        inv = D[D.index("<!-- INVESTMENT TAB -->"):]; banner = inv[inv.index('<div class="roi-sub">'):]; banner = banner[:banner.index("</div>")]
+        ok(f"{name}: the Investment banner says 'Results in 90 days.' once, right after 'Go-live in 72 hours after onboarding.' (v16.9)",
+           banner.endswith("Up to 100% MiDS reimbursement, based on available funds. Go-live in 72 hours after onboarding. Results in 90 days.</strong>")
+           and banner.count("Results in 90 days.") == 1, banner[-200:])
         if want != "Critical": ok(f"{name}: verdict colour {col} and label [{want.upper()}]", col in H and f"[</span>{want.upper()}<" in H and "[</span>CRITICAL<" not in H)
         else: ok(f"{name}: verdict stays [CRITICAL] red", "[</span>CRITICAL<" in H and "#dc2626" in H)
         if name.startswith("james"): ok("james: rows and overall equal the locked reference in SKILL.md", S.score_rows(ev)[1] == [10.0, 4.0, 2.3, 8.4, 0.0, 9.2, 5.6, 5.0] and S.overall(S.score_rows(ev)[1]) == 5.6)

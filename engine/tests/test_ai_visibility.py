@@ -99,6 +99,7 @@ def run_once():
     sc171 = V.scores(m); br = V.brief(m)
     ok("v17.1 counts only answers whose number one suggestion is the dealer", sc171["named"] == sum(1 for a in m["ai_visibility"]["answers"] if a["businesses"][0]["name"] == "Example Mitsubishi"), sc171["named"])
     ok("v17.1 brief: 'Example Mitsubishi was named only X times out of 125'", f"was named only {sc171['named']} times out of 125" in br, br[:200])
+    ok("'only' never stands before 0", V.named_line(m, 0, 125).endswith("was named 0 times out of 125") and V.only(0, 125) == "0 times out of 125" and V.only(3, 125) == "only 3 times out of 125", V.named_line(m, 0, 125))
     with tempfile.TemporaryDirectory() as t:
         wb = load_workbook(V.sheet(m, pathlib.Path(t) / "z.xlsx")); ok("v17.1 spreadsheet: Business Suggested and Dealer Named columns", wb["ChatGPT"]["I1"].value == "Business Suggested" and wb["ChatGPT"]["K1"].value == "Dealer Named")
     # v17.1: the competitor named most — tally of number one suggestions that are other dealerships

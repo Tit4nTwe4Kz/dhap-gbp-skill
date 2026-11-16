@@ -271,7 +271,7 @@ def _dept_phones_ok(ev):
     D = ev["nap"]["dept_phones"]
     return not D or all(_digits(x["gbp"]) == _digits(x["site"]) or (directories.applies(ev) and (directories.toll_free(x["gbp"]) or directories.toll_free(x["site"]))) for x in D)
 
-AI_PART_171 = "Times named"   # v17.1: its chip reads "Times named only X out of 125" (design.chips)
+AI_PART_171 = "Times named"   # v17.1: its chip reads "Times named only X out of 125" (no "only" before 0) (design.chips)
 
 def row_parts(ev):
     """RULE L (v16.3): how each row's 10 points add up, for the scorecard. One entry per row:

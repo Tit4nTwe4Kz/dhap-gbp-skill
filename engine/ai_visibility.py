@@ -20,7 +20,7 @@ the dealer. No dealer name and no brand is added to a question.
              reason; never retried. (v16.1: an API's rate limit or server error is retried with backoff; that is the API
              asking us to slow down, not a robot check. An ask that still fails is recorded as blocked.)
   score      per question: answers naming the dealer (v17.1: as the number one suggestion) / answers given for that
-             question x 100. Said everywhere as "[Dealer] was named only X times out of 125".
+             question x 100. Said everywhere as "[Dealer] was named only X times out of 125" ("only" left out when X is 0).
              The category (scorecard row 9, "AI Answer Visibility"): answers naming the dealer / all answers given x 10
              (0..10; 10% = 1). Blocked answers are not counted on either side.
   outputs    the rep brief gets the business named most for each question on each tool; the spreadsheet
@@ -69,12 +69,13 @@ DEPT_LABEL = {"sales": "Sales", "service": "Service", "parts": "Parts"}
 def applies(ev): return str(ev.get("audit_date", "")) >= START
 def v161(ev): return str(ev.get("audit_date", "")) >= START_161
 def v171(ev): return str(ev.get("audit_date", "")) >= START_171
+def ONLY(n): return "only " if n else ""   # "only" never stands before 0 (Travis, Nov 16 2026)
 def named_line(ev, named, answered):
     """The one way the count is said, everywhere (v17.1, decided by Travis Nov 16 2026)."""
-    return f"{ev.get('dealer', 'The dealer')} was named only {named} {'time' if named == 1 else 'times'} out of {answered}"
+    return f"{ev.get('dealer', 'The dealer')} was named {ONLY(named)}{named} {'time' if named == 1 else 'times'} out of {answered}"
 def only(named, answered):
     """Table and card form of the same count: 'only X times out of Y' (v17.1)."""
-    return f"only {named} {'time' if named == 1 else 'times'} out of {answered:,}"
+    return f"{ONLY(named)}{named} {'time' if named == 1 else 'times'} out of {answered:,}"
 def count_cell(ev, named, answered): return only(named, answered) if v171(ev) else f"{named} of {answered}"
 def _key(name): return " ".join(w for w in fold(name).split() if w not in ("of", "the", "at", "inc", "llc"))
 def top_rival(ev):
@@ -182,7 +183,7 @@ def brief(ev):
         out += ["Not read (blocked, not counted): " + ", ".join(f"{t} {n}" for t, n in by.items()) + ".", ""]
     for i, d, _ in questions(ev):
         q = S["questions"][i]
-        out += [f"**{DEPT_LABEL[d]} — \"{ask(i, A.get('city_st', '[City, ST]'))}\"** — named only {q['named']} {'time' if q['named'] == 1 else 'times'} out of {q['answered']} ({q['score']}/100)", "",
+        out += [f"**{DEPT_LABEL[d]} — \"{ask(i, A.get('city_st', '[City, ST]'))}\"** — named {ONLY(q['named'])}{q['named']} {'time' if q['named'] == 1 else 'times'} out of {q['answered']} ({q['score']}/100)", "",
                 "| Tool | Dealer named | Named most | Type | Times |", "|---|---|---|---|---|"]
         for t in tools(ev):
             nm, ty, times, n = W[(i, t)]

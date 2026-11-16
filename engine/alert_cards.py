@@ -111,7 +111,7 @@ def menus(ev):
     if AV.applies(ev):
         V = AV.scores(ev)
         if V["answered"] and V["named"] < V["answered"]:
-            M["AI Answers"].append(card("AI_ANSWERS_NAMED", V["named"], f"Named Only This Many Times<br/>Out of {V['answered']:,} AI Answers" if AV.v171(ev) else "AI Answers Naming<br/>This Dealership", f"the dealership named only {V['named']} {'time' if V['named'] == 1 else 'times'} out of {V['answered']:,} AI answers" + (f" while {AV.rival_line(R)}" if (R := AV.top_rival(ev) if AV.v171(ev) else None) else ""), "" if AV.v171(ev) else f" / {V['answered']}"))
+            M["AI Answers"].append(card("AI_ANSWERS_NAMED", V["named"], f"Times AI Named This Dealership<br/>Out of {V['answered']:,} AI Answers" if AV.v171(ev) else "AI Answers Naming<br/>This Dealership", f"the dealership named {AV.ONLY(V['named'])}{V['named']} {'time' if V['named'] == 1 else 'times'} out of {V['answered']:,} AI answers" + (f" while {AV.rival_line(R)}" if (R := AV.top_rival(ev) if AV.v171(ev) else None) else ""), "" if AV.v171(ev) else f" / {V['answered']}"))
         return M
     ans = [a for a in (ev.get("ai_answers") or {}).get("answers", []) if a.get("status") == "answered"]
     best = [a for a in ans if a["prompt"] == "best"]; n = sum(1 for a in best if a.get("named") is False)
